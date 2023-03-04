@@ -4,7 +4,7 @@
 #include <memory>
 #include <string_view>
 
-namespace template_project {
+namespace bm {
 
 struct Window {
 	struct WinNative;

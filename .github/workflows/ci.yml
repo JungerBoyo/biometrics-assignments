@@ -3,7 +3,10 @@ name: ci
 on:
   release:
     types: [published]
-
+  push:
+    tags:
+    branches:
+      - main
 env: 
   CONAN_SYSREQUIRES_MODE: enabled
   CONAN_USER_HOME: "${{ github.workspace }}/conan-cache"

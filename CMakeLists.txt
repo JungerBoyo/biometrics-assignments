@@ -11,7 +11,7 @@ include(${_project_options_SOURCE_DIR}/Index.cmake)
 ###########################
 
 ### set up project ###
-project(template
+project(biometrics-assignments
   VERSION 1.0.0
   DESCRIPTION "C++ glfw3+opengl+imgui template project"
   HOMEPAGE_URL "https://github.com/JungerBoyo/opengl-template-project"

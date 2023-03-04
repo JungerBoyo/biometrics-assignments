@@ -3,14 +3,16 @@ find_package(glad REQUIRED)
 find_package(imgui REQUIRED)
 find_package(stb REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(implot REQUIRED)
 
-add_library(boilerplate_IMPL STATIC Shader.cpp Window.cpp)
+add_library(boilerplate_IMPL STATIC Shader.cpp Window.cpp Quad.cpp Histogram.cpp Image.cpp)
 target_link_libraries(boilerplate_IMPL PUBLIC boilerplate_INC)
 
 target_link_system_libraries(boilerplate_IMPL
   PRIVATE
     glad::glad
     spdlog::spdlog
+    stbi
     SHCONFIG
 )
 
@@ -28,6 +30,7 @@ target_link_libraries(${PROJECT_NAME}
 
 target_link_system_libraries(${PROJECT_NAME}
   PRIVATE
+    implot::implot
     imgui_bindings
     imgui::imgui
     spdlog::spdlog

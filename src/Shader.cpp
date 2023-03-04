@@ -6,7 +6,7 @@
 #include <spdlog/spdlog.h>
 #include <glad/glad.h>
 
-using namespace template_project;
+using namespace bm;
 
 Shader::Shader(Type type, const std::vector<std::filesystem::path>& paths) : type_(type) {
     int ext_num{0};

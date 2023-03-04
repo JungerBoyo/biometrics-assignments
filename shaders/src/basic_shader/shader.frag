@@ -7,5 +7,6 @@ layout(binding = 5) uniform sampler2D u_tex;
 layout(location = 0) in vec2 in_texcoord;
 
 void main() {
-    fragment = texture(u_tex, in_texcoord);
+    vec4 texel = texture(u_tex, in_texcoord);
+    fragment = texel;
 }

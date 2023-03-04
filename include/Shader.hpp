@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace template_project {
+namespace bm {
 
 struct Shader {
     enum class Type : std::size_t { 
