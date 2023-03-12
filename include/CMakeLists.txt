@@ -7,6 +7,9 @@ add_library(boilerplate_INC INTERFACE
     Quad.hpp
     Histogram.hpp
     Image.hpp
+    Framebuffer.hpp
+    Texture2D.hpp
+    Algorithm.hpp
 )
 
 target_link_system_libraries(boilerplate_INC INTERFACE glfw::glfw)

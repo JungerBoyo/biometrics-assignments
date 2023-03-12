@@ -5,7 +5,16 @@ find_package(stb REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(implot REQUIRED)
 
-add_library(boilerplate_IMPL STATIC Shader.cpp Window.cpp Quad.cpp Histogram.cpp Image.cpp)
+add_library(boilerplate_IMPL STATIC 
+  Shader.cpp 
+  Window.cpp 
+  Quad.cpp 
+  Histogram.cpp 
+  Image.cpp
+  Framebuffer.cpp
+  Texture2D.cpp
+  Algorithm.cpp
+)
 target_link_libraries(boilerplate_IMPL PUBLIC boilerplate_INC)
 
 target_link_system_libraries(boilerplate_IMPL

@@ -2,6 +2,8 @@
 #define BM_TYPES_HPP
 
 #include <cinttypes>
+#include <filesystem>
+#include <numeric>
 
 namespace bm {
 
@@ -17,6 +19,18 @@ using i8  = std::int8_t;
 
 using f32 = float;
 using f64 = double;
+
+template<typename T>
+struct Pixel {
+    T r;
+    T g;
+    T b;
+};
+
+template<typename T>
+using lim = std::numeric_limits<T>;
+
+namespace fs = std::filesystem;
 
 }
 

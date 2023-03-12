@@ -17,7 +17,7 @@ Image::Image(const std::filesystem::path& image_path) {
     }
 }
 
-void Image::save(const std::filesystem::path& save_to_path) {
+void Image::save(const std::filesystem::path& save_to_path) const {
     if (!std::filesystem::is_regular_file(save_to_path)) {
         spdlog::error("File can only be saved to regular file path", save_to_path.c_str());
         return;

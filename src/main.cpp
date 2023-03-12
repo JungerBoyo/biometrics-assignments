@@ -1,6 +1,7 @@
 #include <array>
 #include <span>
 #include <optional>
+#include <ranges>
 
 #include <Shader.hpp>
 #include <Window.hpp>
@@ -8,6 +9,9 @@
 #include <Quad.hpp>
 #include <Histogram.hpp>
 #include <Image.hpp>
+#include <Framebuffer.hpp>
+#include <Texture2D.hpp>
+#include <Algorithm.hpp>
 
 #include <glad/glad.h>
 
@@ -15,6 +19,7 @@
 #include <spdlog/spdlog.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_bindings/imgui_impl_glfw.h>
 #include <imgui_bindings/imgui_impl_opengl3.h>
 
@@ -35,14 +40,9 @@ using namespace bm;
 // using f32 = float;
 // using f64 = double;
 
-template<typename T>
-using lim = std::numeric_limits<T>;
+constexpr i64 MAX_ALG_DESCRIPTOR_SIZE{4096};
 
-namespace fs = std::filesystem;
-
-constexpr i64 MAX_ALG_DESCRIPTOR_SIZE{256};
-
-constexpr std::string_view DEFAULT_ASSET_IMAGE_PATH {"assets/textures/img.jpg"};
+constexpr std::string_view DEFAULT_ASSET_IMAGE_PATH {"assets/textures/OLFJ3yF.jpg"};
 constexpr std::string_view ASSETS_DIR_RELATIVE_PATH {"assets/textures"};
 constexpr std::array<std::string_view, 3> ACCEPTED_ASSETS_EXTENSIONS {
     ".png",
@@ -106,10 +106,7 @@ int main() {
     u32 quad_vbo_id{ 0U };
     u32 quad_vao_id{ 0U };
     u32 quad_ubo_id{ 0U };
-    u32 quad_tex_id{ 0U };
     u32 alg_descriptor_ubo_id{ 0U };
-    u32 texture_fbo_id { 0U };
-    u32 aux_quad_tex_id { 0U };
 
     Shader basic_shader(
         Shader::Type::VERTEX_FRAGMENT,
@@ -118,12 +115,32 @@ int main() {
             "shaders/bin/basic_shader/frag.spv",
         }
     );
-
-    Shader binarization_shader(
+    Shader threshold_binarization_shader(
         Shader::Type::VERTEX_FRAGMENT,
         {
-            "shaders/bin/binarization_shader/vert.spv",
-            "shaders/bin/binarization_shader/frag.spv",
+            "shaders/bin/threshold_binarization_shader/vert.spv",
+            "shaders/bin/threshold_binarization_shader/frag.spv",
+        }
+    );
+    Shader otsu_binarization_shader(
+        Shader::Type::VERTEX_FRAGMENT,
+        {
+            "shaders/bin/otsu_binarization_shader/vert.spv",
+            "shaders/bin/otsu_binarization_shader/frag.spv",
+        }
+    );
+    Shader stretching_shader(
+        Shader::Type::VERTEX_FRAGMENT,
+        {
+            "shaders/bin/stretching_shader/vert.spv",
+            "shaders/bin/stretching_shader/frag.spv",
+        }
+    );
+    Shader equalization_shader(
+        Shader::Type::VERTEX_FRAGMENT,
+        {
+            "shaders/bin/equalization_shader/vert.spv",
+            "shaders/bin/equalization_shader/frag.spv",
         }
     );
 
@@ -151,39 +168,29 @@ int main() {
     glBindBufferBase(GL_UNIFORM_BUFFER, SHCONFIG_TRANSFORM_UBO_BINDING, quad_ubo_id);
     glBindBufferBase(GL_UNIFORM_BUFFER, SHCONFIG_ALG_DESCRIPTOR_UBO_BINDING, alg_descriptor_ubo_id);
     // create Texture and load image
-
-    glCreateTextures(GL_TEXTURE_2D, 1, &quad_tex_id);
     Image image(DEFAULT_ASSET_IMAGE_PATH);
-
-    // const auto num_levels = static_cast<int>(std::ceil(std::log2(std::min(
-    //     static_cast<float>(width), 
-    //     static_cast<float>(height)
-    // ))));
-    glTextureStorage2D(quad_tex_id, 1, GL_RGBA8, image.width, image.height);
-    glTextureParameteri(quad_tex_id, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTextureParameteri(quad_tex_id, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    // glTextureParameteri(quad_tex_id, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-    // glTextureParameteri(quad_tex_id, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTextureSubImage2D(
-        quad_tex_id,
-        0, 0, 0, image.width, image.height,
-        GL_RGBA, GL_UNSIGNED_BYTE,
-        static_cast<const void*>(image.pixels.data())
-    );
-    // glGenerateTextureMipmap(quad_tex_id);
-    glBindTextureUnit(SHCONFIG_2D_TEX_BINDING, quad_tex_id);
+    Texture2D img_texture({
+        .width = image.width,
+        .height = image.height,
+        .internal_fmt = GL_RGBA8,
+        .fmt = GL_RGBA,
+        .type = GL_UNSIGNED_BYTE,
+        .wrap_s = GL_REPEAT,
+        .wrap_t = GL_REPEAT,
+        .min_filter = 0,
+        .mag_filter = 0,
+        .mipmap = false
+    });
+    img_texture.update(static_cast<const void*>(image.pixels.data()));
+    img_texture.bind(SHCONFIG_2D_TEX_BINDING);
 
     // Create texture FBO
-    glCreateFramebuffers(1, &texture_fbo_id);
-    glCreateTextures(GL_TEXTURE_2D, 1, &aux_quad_tex_id);
-    glTextureStorage2D(aux_quad_tex_id, 1, GL_RGBA8, image.width, image.height);
-    glBindFramebuffer(GL_FRAMEBUFFER, texture_fbo_id);
-    glFramebufferTexture2D(
-        GL_FRAMEBUFFER, 
-        GL_COLOR_ATTACHMENT0,
-        GL_TEXTURE_2D, aux_quad_tex_id, 0
-    );
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    FBO fbo({
+        .width = image.width,
+        .height = image.height,
+        .color_attachment = GL_COLOR_ATTACHMENT0,
+        .internal_fmt = GL_RGBA8
+    });
     // bind
     basic_shader.bind();
     glBindVertexArray(quad_vao_id);
@@ -204,19 +211,43 @@ int main() {
     histogram.clear();
     histogram.set(image.pixels.data(), image.pixels.size(), static_cast<std::size_t>(image.channels_num));
 
-    // App algorithms data
-    //  Binarization
-    struct BinarizationDescriptor {
-        enum : i32 {
-            BINARIZE_CHANNEL_ALL,
-            BINARIZE_CHANNEL_R,
-            BINARIZE_CHANNEL_G,
-            BINARIZE_CHANNEL_B
-        };
-        float threshold = .0F;
-        i32 channel = BINARIZE_CHANNEL_ALL; 
+    // App algorithms 
+    ThresholdBinarizationAlgorithm threshold_binarization_alg(threshold_binarization_shader);
+    OtsuBinarizationAlgorithm otsu_binarization_alg(otsu_binarization_shader);
+    EqualizationAlgorithm equalization_alg(equalization_shader);
+    StretchingAlgorithm stretching_alg(stretching_shader);
+
+    const auto alg_perform_fn = [&]{
+        fbo.bind();
+        glViewport(0, 0, image.width, image.height);
+        TransformData tmp_transform_data { .quad_scale = 1.F, .flip_tex_y_axis_xor = 1};
+        glNamedBufferSubData(
+            quad_ubo_id, 
+            0, sizeof(tmp_transform_data), 
+            static_cast<const void*>(&tmp_transform_data)
+        );
+        glDrawArrays(GL_TRIANGLES, 0, QUAD_VERTICES.size());
+
+        glReadPixels(
+            0, 0, image.width, image.height, 
+            GL_RGBA, GL_UNSIGNED_BYTE,
+            static_cast<void*>(image.pixels.data())
+        );
+        glCopyTextureSubImage2D(img_texture.tex_id_, 0, 0, 0, 0, 0, image.width, image.height);
+
+        fbo.unbind();
     };
-    BinarizationDescriptor binarization_descriptor = {};
+
+    const std::function<void()> submit_binarization_data_fn = [&] {
+        threshold_binarization_alg.continuousSubmit(alg_descriptor_ubo_id);
+    };
+    const std::function<void()> submit_stretching_data_fn = [&] {
+        stretching_alg.continuousSubmit(alg_descriptor_ubo_id);
+    };
+    const std::function<void()> submit_equalization_data_fn = [&] {
+        equalization_alg.continuousSubmit(alg_descriptor_ubo_id);
+    };
+    const std::function<void()>* submit_current_alg_data_fn = nullptr;
 
     // main loop
     while (!window.shouldClose()) {
@@ -242,11 +273,10 @@ int main() {
             0, sizeof(transform_data), 
             static_cast<const void*>(&transform_data)
         );
-        glNamedBufferSubData(
-            alg_descriptor_ubo_id, 
-            0, sizeof(BinarizationDescriptor), 
-            static_cast<const void*>(&binarization_descriptor)
-        );
+
+        if (submit_current_alg_data_fn != nullptr) {
+            (*submit_current_alg_data_fn)();
+        }
 
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         glDrawArrays(GL_TRIANGLES, 0, QUAD_VERTICES.size());
@@ -261,10 +291,10 @@ int main() {
             ImGui::ColorPicker3("clear color", clear_color.data());
         ImGui::End();
 
-        ImGui::Begin("Binarization");
+        ImGui::Begin("Threshold binarization");
             ImGui::SliderFloat(
                 "threshold", 
-                &binarization_descriptor.threshold,
+                &threshold_binarization_alg.descriptor.threshold,
                 0.F,
                 1.F
             );
@@ -272,79 +302,136 @@ int main() {
                 static u8 states = 0x01;                
                 if (ImGui::RadioButton(
                         "binarize all channels", 
-                        (states & (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_ALL)) > 0
+                        (states & (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_ALL)) > 0
                     )) {
-                    binarization_descriptor.channel = BinarizationDescriptor::BINARIZE_CHANNEL_ALL;
-                    states = (states & 0x00) | (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_ALL);
+                    threshold_binarization_alg.descriptor.channel = ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_ALL;
+                    states = (states & 0x00) | (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_ALL);
                 }
                 if (ImGui::RadioButton(
                         "binarize red channel", 
-                        (states & (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_R)) > 0
+                        (states & (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_R)) > 0
                     )) {
-                    binarization_descriptor.channel = BinarizationDescriptor::BINARIZE_CHANNEL_R;
-                    states = (states & 0x00) | (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_R);
+                    threshold_binarization_alg.descriptor.channel = ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_R;
+                    states = (states & 0x00) | (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_R);
                 }
                 if (ImGui::RadioButton(
                         "binarize green channel", 
-                        (states & (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_G)) > 0
+                        (states & (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_G)) > 0
                     )) {
-                    binarization_descriptor.channel = BinarizationDescriptor::BINARIZE_CHANNEL_G;
-                    states = (states & 0x00) | (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_G);
+                    threshold_binarization_alg.descriptor.channel = ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_G;
+                    states = (states & 0x00) | (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_G);
                 }
                 if (ImGui::RadioButton(
                         "binarize blue channel", 
-                        (states & (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_B)) > 0
+                        (states & (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_B)) > 0
                     )) {
-                    binarization_descriptor.channel = BinarizationDescriptor::BINARIZE_CHANNEL_B;
-                    states = (states & 0x00) | (0x01 << BinarizationDescriptor::BINARIZE_CHANNEL_B);
+                    threshold_binarization_alg.descriptor.channel = ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_B;
+                    states = (states & 0x00) | (0x01 << ThresholdBinarizationDescriptor::BINARIZE_CHANNEL_B);
                 }
             }
-            if (ImGui::Button("Perform single")) {
-                glBindFramebuffer(GL_FRAMEBUFFER, texture_fbo_id);
-                glViewport(0, 0, image.width, image.height);
-                binarization_shader.bind();
-                TransformData tmp_transform_data { .quad_scale = 1.F, .flip_tex_y_axis_xor = 1};
-                glNamedBufferSubData(
-                    quad_ubo_id, 
-                    0, sizeof(tmp_transform_data), 
-                    static_cast<const void*>(&tmp_transform_data)
-                );
-                glDrawArrays(GL_TRIANGLES, 0, QUAD_VERTICES.size());
-
-                glReadPixels(
-                    0, 0, image.width, image.height, 
-                    GL_RGBA, GL_UNSIGNED_BYTE, 
-                    static_cast<void*>(image.pixels.data())
-                );
-                glCopyTextureSubImage2D(quad_tex_id, 0, 0, 0, 0, 0, image.width, image.height);
-
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            if (ImGui::Button("Perform single##0")) {
+                threshold_binarization_alg.submit(alg_descriptor_ubo_id);
+                threshold_binarization_alg.shader.bind();
+                alg_perform_fn();
                 basic_shader.bind();
             }
-            if (static bool state = false; ImGui::Checkbox("Perform continuously", &state)) {
+            if (static bool state = false; ImGui::Checkbox("Perform continuously##0", &state)) {
                 if (state) {
-                    binarization_shader.bind();
+                    submit_current_alg_data_fn = &submit_binarization_data_fn;
+                    threshold_binarization_alg.shader.bind();
                 } else {
-                    glBindFramebuffer(GL_FRAMEBUFFER, texture_fbo_id);
-                    glViewport(0, 0, image.width, image.height);
-                    binarization_shader.bind();
-                    TransformData tmp_transform_data { .quad_scale = 1.F, .flip_tex_y_axis_xor = 1};
-                    glNamedBufferSubData(
-                        quad_ubo_id, 
-                        0, sizeof(tmp_transform_data), 
-                        static_cast<const void*>(&tmp_transform_data)
-                    );
-                    glDrawArrays(GL_TRIANGLES, 0, QUAD_VERTICES.size());
-
-                    glReadPixels(
-                        0, 0, image.width, image.height, 
-                        GL_RGBA, GL_UNSIGNED_BYTE, 
-                        static_cast<void*>(image.pixels.data())
-                    );
-                    glCopyTextureSubImage2D(quad_tex_id, 0, 0, 0, 0, 0, image.width, image.height);
-
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    threshold_binarization_alg.submit(alg_descriptor_ubo_id);
+                    threshold_binarization_alg.shader.bind();
+                    alg_perform_fn();
                     basic_shader.bind();
+                    submit_current_alg_data_fn = nullptr;
+                }
+            }
+        ImGui::End();
+
+        ImGui::Begin("Otsu binarization");
+            ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);
+                ImGui::SliderFloat("threshold", &otsu_binarization_alg.descriptor.threshold, 0.F, 1.F);
+            ImGui::PopItemFlag();
+            ImGui::PopStyleVar();
+            if (ImGui::Button("Perform")) {
+                histogram.clear();
+                histogram.set(
+                    image.pixels.data(), 
+                    image.pixels.size(), 
+                    static_cast<std::size_t>(image.channels_num)
+                );
+                otsu_binarization_alg.prepare(histogram);
+                otsu_binarization_alg.submit(alg_descriptor_ubo_id);
+                otsu_binarization_alg.shader.bind();
+                alg_perform_fn();
+                basic_shader.bind();
+            }
+        ImGui::End();
+
+        ImGui::Begin("Stretching");
+            ImGui::SliderFloat3("global max", stretching_alg.descriptor.global_max, 0.F, 1.F);
+            if (ImGui::Button("Perform single##1")) {
+                stretching_alg.prepare(image);
+                stretching_alg.submit(alg_descriptor_ubo_id);
+
+                stretching_alg.shader.bind();
+                alg_perform_fn();
+                basic_shader.bind();
+            }
+            if (static bool state = false; ImGui::Checkbox("Perform continuously##1", &state)) {
+                if (state) {
+                    stretching_alg.prepare(image);
+                    submit_current_alg_data_fn = &submit_stretching_data_fn;
+                    stretching_shader.bind();
+                } else {
+                    stretching_alg.submit(alg_descriptor_ubo_id);
+                    stretching_alg.shader.bind();
+                    alg_perform_fn();
+                    basic_shader.bind();                
+                    submit_current_alg_data_fn = nullptr;
+                }
+            }
+        ImGui::End();
+
+        ImGui::Begin("Equalization");
+            ImGui::SliderInt("range", &equalization_alg.descriptor.range, 1, 256);
+            if (ImGui::Button("Perform single##2")) {
+                histogram.clear();
+                histogram.set(
+                    image.pixels.data(), 
+                    image.pixels.size(), 
+                    static_cast<std::size_t>(image.channels_num)
+                );
+                equalization_alg.prepare(histogram);
+                equalization_alg.submit(alg_descriptor_ubo_id);
+
+                equalization_alg.shader.bind();
+
+                alg_perform_fn();
+
+                basic_shader.bind();
+            }
+            if (static bool state = false; ImGui::Checkbox("Perform continuously##2", &state)) {
+                if (state) {
+                    histogram.clear();
+                    histogram.set(
+                        image.pixels.data(), 
+                        image.pixels.size(), 
+                        static_cast<std::size_t>(image.channels_num)
+                    );
+                    equalization_alg.prepare(histogram);                
+                    equalization_alg.submit(alg_descriptor_ubo_id);
+
+                    equalization_alg.shader.bind();
+
+                    submit_current_alg_data_fn = &submit_equalization_data_fn;
+                } else {
+                    equalization_alg.shader.bind();
+                    alg_perform_fn();
+                    basic_shader.bind();                
+                    submit_current_alg_data_fn = nullptr;
                 }
             }
         ImGui::End();
@@ -425,19 +512,12 @@ int main() {
             }
             if (ImGui::Button("Load selected image")) {
                 if (image.update(asset_imgs_paths.value().at(static_cast<std::size_t>(selected_asset)))) {
-                    glDeleteTextures(1, &quad_tex_id);
-                    glCreateTextures(GL_TEXTURE_2D, 1, &quad_tex_id);
-                    
-                    glTextureStorage2D(quad_tex_id, 1, GL_RGBA8, image.width, image.height);
-                    glTextureParameteri(quad_tex_id, GL_TEXTURE_WRAP_S, GL_REPEAT);
-                    glTextureParameteri(quad_tex_id, GL_TEXTURE_WRAP_T, GL_REPEAT);
-                    glTextureSubImage2D(
-                        quad_tex_id,
-                        0, 0, 0, image.width, image.height,
-                        GL_RGBA, GL_UNSIGNED_BYTE,
-                        static_cast<const void*>(image.pixels.data())
-                    );
-                    glBindTextureUnit(SHCONFIG_2D_TEX_BINDING, quad_tex_id);
+                    img_texture.unbind(SHCONFIG_2D_TEX_BINDING);
+                    img_texture.resize(image.width, image.height);
+                    img_texture.update(static_cast<const void*>(image.pixels.data()));
+                    img_texture.bind(SHCONFIG_2D_TEX_BINDING);
+
+                    fbo.resize(image.width, image.height);
                 }
             }
             if (ImGui::Button("Save to selected image")) {
@@ -455,11 +535,14 @@ int main() {
     std::array<u32, 3> buffers {{quad_vbo_id, quad_ubo_id, alg_descriptor_ubo_id}};
     glDeleteBuffers(buffers.size(), buffers.data());
     glDeleteVertexArrays(1, &quad_vao_id);
-    std::array<u32, 2> textures {{quad_tex_id, aux_quad_tex_id}};
+    std::array<u32, 2> textures {{img_texture.tex_id_, fbo.tex_id_}};
     glDeleteTextures(textures.size(), textures.data());
-    glDeleteFramebuffers(1, &texture_fbo_id);
+    glDeleteFramebuffers(1, &fbo.fbo_id_);
     basic_shader.deinit();
-    binarization_shader.deinit();
+    threshold_binarization_shader.deinit();
+    otsu_binarization_shader.deinit();
+    stretching_shader.deinit();
+    equalization_shader.deinit();
     // imgui stuff
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
