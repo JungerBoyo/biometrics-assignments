@@ -51,7 +51,7 @@ Shader::Shader(Type type, const std::vector<std::filesystem::path>& paths) : typ
 
 	prog_id_ = glCreateProgram();
 
-	for (std::size_t i{0}; i < 2; ++i) {
+	for (std::size_t i{0}; i < enums.size(); ++i) {
 		auto& sh_id = shader_ids_.at(i);
         sh_id = glCreateShader(enums[i]);
 		if (use_spirv) {
@@ -72,7 +72,7 @@ Shader::Shader(Type type, const std::vector<std::filesystem::path>& paths) : typ
 }
 
 std::vector<char> Shader::parseAsSpirv(const std::filesystem::path &path) {
-	std::ifstream stream(path.c_str(), std::ios::binary | std::ios::ate);
+	std::ifstream stream(path, std::ios::binary | std::ios::ate);
 
 	if (!stream.good()) {
 		throw std::runtime_error(fmt::format(
@@ -91,7 +91,7 @@ std::vector<char> Shader::parseAsSpirv(const std::filesystem::path &path) {
 }
 
 void Shader::compileShader(const std::filesystem::path &path, std::uint32_t shader_id) {
-	std::ifstream stream(path.c_str());
+	std::ifstream stream(path);
 	std::stringstream sstream;
 	for (std::string line; std::getline(stream, line);) {
 		sstream << line << '\n';
@@ -109,7 +109,7 @@ void Shader::bind() const {
 }
 
 void Shader::deinit() {
-	for (std::size_t i{0}; i < 2; ++i) {
+	for (std::size_t i{0}; i < static_cast<std::size_t>(type_); ++i) {
 		auto &sh_id = shader_ids_.at(i);
 		glDetachShader(prog_id_, sh_id);
 		glDeleteShader(sh_id);

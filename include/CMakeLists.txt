@@ -10,6 +10,7 @@ add_library(boilerplate_INC INTERFACE
     Framebuffer.hpp
     Texture2D.hpp
     Algorithm.hpp
+    DirManager.hpp
 )
 
 target_link_system_libraries(boilerplate_INC INTERFACE glfw::glfw)

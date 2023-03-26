@@ -1,7 +1,10 @@
 #include "Algorithm.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <charconv>
 
+#include <spdlog/spdlog.h>
 #include <glad/glad.h>
 
 using namespace bm;
@@ -64,7 +67,7 @@ void EqualizationAlgorithm::prepare(const Histogram& histogram) {
 
     const auto is_positive = [](f32 value) { return value > 0.F; };
 
-    if (auto found = std::find_if(
+    if (const auto found = std::find_if(
             descriptor.distributant_r.cbegin(), 
             descriptor.distributant_r.cend(),
             is_positive); 
@@ -73,7 +76,7 @@ void EqualizationAlgorithm::prepare(const Histogram& histogram) {
     } else {
         descriptor.distributant_r0 = 0;
     }
-    if (auto found = std::find_if(
+    if (const auto found = std::find_if(
             descriptor.distributant_g.cbegin(), 
             descriptor.distributant_g.cend(),
             is_positive); 
@@ -82,7 +85,7 @@ void EqualizationAlgorithm::prepare(const Histogram& histogram) {
     } else {
         descriptor.distributant_g0 = 0;
     }
-    if (auto found = std::find_if(
+    if (const auto found = std::find_if(
             descriptor.distributant_b.cbegin(), 
             descriptor.distributant_b.cend(),
             is_positive); 
@@ -128,6 +131,122 @@ void StretchingAlgorithm::submit(u32 buff_id) {
     glNamedBufferSubData(
         buff_id, 
         0, sizeof(StretchingDescriptor), 
+        static_cast<const void*>(&descriptor)
+    );
+}
+
+void LocalBinarizationAlgorithm::continuousSubmit(u32 buff_id) {
+    glNamedBufferSubData(
+        buff_id,
+        0, sizeof(LocalBinarizationDescriptor),
+        static_cast<const void*>(&descriptor)
+    );
+}
+void LocalBinarizationAlgorithm::submit(u32 buff_id) {
+    glNamedBufferSubData(
+        buff_id,
+        0, sizeof(LocalBinarizationDescriptor),
+        static_cast<const void*>(&descriptor)
+    );
+}
+
+void ConvolutionAlgorithm::prepare(const fs::path& filter_path) {
+    const auto filter_path_str = filter_path.string();
+
+    std::ifstream stream(filter_path);
+    if (!stream.good()) {
+        spdlog::error("Couldn't read filter from {}", filter_path_str);
+        return;
+    }
+
+    std::string line;
+    std::getline(stream, line);
+
+    if (const auto result = std::from_chars(&line.front(), &line.back() + 1, descriptor.kernel_size);
+        result.ec != std::errc()) {
+        spdlog::error("Failed to parse kernel size from {}", filter_path_str);
+        return;
+    }
+    if (descriptor.kernel_size < 0 || descriptor.kernel_size > 10) {
+        spdlog::error("Kernel size declared in {} isn't in range [{}, {}], is {}", 
+            filter_path_str,
+            0, 10, 
+            descriptor.kernel_size
+        );
+        return;
+    }
+
+    const auto kernel_side_size = static_cast<std::size_t>(2 * descriptor.kernel_size + 1);
+
+    i32 line_num{ 0 };
+    for (std::size_t line_num{ 0 }; std::getline(stream, line); ++line_num) {
+        std::from_chars_result result{};
+        result.ptr = &line.front() - 1;
+        for (std::size_t i{0}; i<kernel_side_size; ++i) {
+            f32 value{ 0.F };
+            result = std::from_chars(result.ptr + 1, &line.back() + 1, value);
+            if (result.ec != std::errc()) {
+                spdlog::error("Failed to parse kernel value from {}", filter_path_str);
+                return;
+            }
+            descriptor.kernel[i + line_num * kernel_side_size] = value;
+        }
+    }
+    stream.close();
+
+    float kernel_elements_sum{0.F};
+    for (std::size_t i{0}; i < kernel_side_size*kernel_side_size; ++i) {
+        kernel_elements_sum += descriptor.kernel[i];
+    }
+    if (kernel_elements_sum > 0.F) {
+        for (std::size_t i{0}; i < kernel_side_size*kernel_side_size; ++i) {
+            descriptor.kernel[i] /= kernel_elements_sum;
+        }
+    }
+}
+void ConvolutionAlgorithm::continuousSubmit(u32 buff_id) {}
+void ConvolutionAlgorithm::submit(u32 buff_id) {
+    const auto kernel_size_in_bytes = sizeof(f32) *
+        (2 * descriptor.kernel_size + 1) * 
+        (2 * descriptor.kernel_size + 1);
+    glNamedBufferSubData(
+        buff_id,
+        0, offsetof(ConvolutionDescriptor, kernel) + kernel_size_in_bytes,
+        static_cast<const void*>(&descriptor)
+    );
+}
+
+void MedianFilterAlgorithm::prepare() {}
+void MedianFilterAlgorithm::continuousSubmit(u32 buff_id) {
+    glNamedBufferSubData(
+        buff_id,
+        0, sizeof(MedianFilterDescriptor),
+        static_cast<const void*>(&descriptor)
+    );
+}
+void MedianFilterAlgorithm::submit(u32 buff_id) {
+    glNamedBufferSubData(
+        buff_id,
+        0, sizeof(MedianFilterDescriptor),
+        static_cast<const void*>(&descriptor)
+    );
+}
+
+
+void PixelizationAlgorithm::prepare(u32 tex_id, u32 binding) {
+    glBindImageTexture(binding, tex_id, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8UI);
+}
+void PixelizationAlgorithm::continuousSubmit(u32 buff_id) {
+    glNamedBufferSubData(
+        buff_id,
+        0, sizeof(PixelizationDescriptor),
+        static_cast<const void*>(&descriptor)
+    );
+}
+void PixelizationAlgorithm::submit(u32 buff_id) {
+    glNamedBufferSubData(
+        buff_id,
+        0, sizeof(PixelizationDescriptor),
         static_cast<const void*>(&descriptor)
     );
 }

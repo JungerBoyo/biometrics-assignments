@@ -14,6 +14,7 @@ add_library(boilerplate_IMPL STATIC
   Framebuffer.cpp
   Texture2D.cpp
   Algorithm.cpp
+  DirManager.cpp
 )
 target_link_libraries(boilerplate_IMPL PUBLIC boilerplate_INC)
 

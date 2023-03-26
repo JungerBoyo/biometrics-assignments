@@ -1,0 +1,63 @@
+#version 450 core
+
+layout(local_size_x = 1) in;
+
+layout(rgba8ui, binding = 0) uniform uimage2D u_image;
+
+layout(std140, binding = 6) uniform PixelizationDescriptor {
+    int kernel_size;
+};
+
+const int CHANNELS_NUM = 4;
+
+void main() {
+    int region_index = int(
+        gl_GlobalInvocationID.z * (gl_NumWorkGroups.x*gl_WorkGroupSize.x) * (gl_NumWorkGroups.y*gl_WorkGroupSize.y) +
+        gl_GlobalInvocationID.y * (gl_NumWorkGroups.x*gl_WorkGroupSize.x) +
+        gl_GlobalInvocationID.x
+    );
+
+    ivec2 image_size = imageSize(u_image);
+    int kernel_side_size = kernel_size;
+    int regions_width = 
+        (image_size.x / kernel_side_size) + 
+        ((image_size.x % kernel_side_size != 0) ? 1 : 0);
+
+    ivec2 region_begin_location = ivec2(
+        (region_index % regions_width) * kernel_side_size,
+        (region_index / regions_width) * kernel_side_size
+    );
+
+    ivec2 region_extent = ivec2(
+        region_begin_location.x + kernel_side_size > image_size.x ?
+            (image_size.x - region_begin_location.x) : kernel_side_size,
+        region_begin_location.y + kernel_side_size > image_size.y ?
+            (image_size.y - region_begin_location.y) : kernel_side_size
+    );
+
+    uvec4 rgba = uvec4(0);
+    for (int y=0; y<region_extent.y; ++y) {
+        for (int x=0; x<region_extent.x; ++x) {
+            rgba += imageLoad(
+                u_image, 
+                ivec2(
+                    region_begin_location.x + x,
+                    region_begin_location.y + y
+                )
+            );
+        }
+    }
+    rgba /= (region_extent.x * region_extent.y);
+    for (int y=0; y<region_extent.y; ++y) {
+        for (int x=0; x<region_extent.x; ++x) {
+            imageStore(
+                u_image, 
+                ivec2(
+                    region_begin_location.x + x,
+                    region_begin_location.y + y
+                ),
+                rgba
+            );
+        }
+    }
+}

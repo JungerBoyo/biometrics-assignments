@@ -12,6 +12,7 @@
 #include <Framebuffer.hpp>
 #include <Texture2D.hpp>
 #include <Algorithm.hpp>
+#include <DirManager.hpp>
 
 #include <glad/glad.h>
 
@@ -27,56 +28,73 @@
 
 using namespace bm;
 
-// using u64 = std::uint64_t;
-// using u32 = std::uint32_t;
-// using u16 = std::uint16_t;
-// using u8  = std::uint8_t;
-
-// using i64 = std::int64_t;
-// using i32 = std::int32_t;
-// using i16 = std::int16_t;
-// using i8  = std::int8_t;
-
-// using f32 = float;
-// using f64 = double;
-
 constexpr i64 MAX_ALG_DESCRIPTOR_SIZE{4096};
 
 constexpr std::string_view DEFAULT_ASSET_IMAGE_PATH {"assets/textures/OLFJ3yF.jpg"};
-constexpr std::string_view ASSETS_DIR_RELATIVE_PATH {"assets/textures"};
-constexpr std::array<std::string_view, 3> ACCEPTED_ASSETS_EXTENSIONS {
-    ".png",
-    ".jpg",
-    ".jpeg"
+
+namespace ImGui {
+
+#define IMGUI_DISABLED(x)\
+    ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);\
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);\
+    x;\
+    ImGui::PopItemFlag();\
+    ImGui::PopStyleVar()
+
+#define IMGUI_DISABLED_CONDITION(c, x)\
+    if (c) {\
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);\
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);\
+        x\
+        ImGui::PopItemFlag();\
+        ImGui::PopStyleVar();\
+    else {\
+        x\
+    }
+
+#define IMGUI_DISABLED_RAW(x)\
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);\
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);\
+        x\
+        ImGui::PopItemFlag();\
+        ImGui::PopStyleVar()
+
+struct SelectablePathList {
+    int selected{ 0 };
+    bool refresh_state{ false };
+
+    bool draw(const std::vector<fs::path>& paths, const char* list_name) {
+        bool result = false;
+        if (ImGui::IsWindowFocused()) {
+            if (!refresh_state) {
+                refresh_state = true;
+                result = true;
+            }
+        } else {
+            refresh_state = false;
+        }
+
+        if (ImGui::BeginListBox(list_name)) {
+            i32 i{ 0 };
+            for (const auto& path : paths) {
+                const auto is_selected = i == selected;
+                if (ImGui::Selectable(path.filename().c_str(), is_selected)) {
+                    selected = i;
+                }
+                ++i;
+
+                if (is_selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            
+            ImGui::EndListBox();
+        }
+
+        return result;
+    }
 };
 
-std::optional<std::vector<fs::path>> findFilesWithExtensionsInDir(
-    const fs::path& dir_path, 
-    std::span<const std::string_view> extensions
-) {
-    if (!fs::is_directory(dir_path)) {
-        return std::nullopt;
-    }
-
-    std::vector<fs::path> result;
-
-    for (const auto& entry : fs::directory_iterator{dir_path}) {
-        if (entry.is_regular_file()) {
-            auto extension = entry.path().extension().string();
-            std::transform(
-                extension.begin(), 
-                extension.end(), 
-                extension.begin(), 
-                [](u8 c) { return std::tolower(c); }
-            );
-            
-            if (std::find(extensions.begin(), extensions.end(), extension) != extensions.end()) {
-                result.emplace_back(std::move(entry.path()));                
-            }
-        }
-    }
-
-    return result;
 }
 
 int main() {
@@ -143,6 +161,33 @@ int main() {
             "shaders/bin/equalization_shader/frag.spv",
         }
     );
+    Shader local_binarization_shader(
+        Shader::Type::VERTEX_FRAGMENT,
+        {
+            "shaders/bin/local_binarization_shader/vert.spv",
+            "shaders/bin/local_binarization_shader/frag.spv"
+        }
+    );
+    Shader convolution_shader(
+        Shader::Type::VERTEX_FRAGMENT,
+        {
+            "shaders/bin/convolution_shader/vert.spv",
+            "shaders/bin/convolution_shader/frag.spv"
+        }
+    );
+    Shader median_filter_shader(
+        Shader::Type::VERTEX_FRAGMENT,
+        {
+            "shaders/bin/median_filter_shader/vert.spv",
+            "shaders/bin/median_filter_shader/frag.spv"
+        }
+    );
+    Shader pixelization_shader(
+        Shader::Type::COMPUTE,
+        {
+            "shaders/bin/pixelization_shader/comp.spv"
+        }
+    );
 
     // create VBO and initialize
     glCreateBuffers(1, &quad_vbo_id);
@@ -195,17 +240,6 @@ int main() {
     basic_shader.bind();
     glBindVertexArray(quad_vao_id);
 
-    // Asset img list
-    i32 selected_asset{ 0 };
-    auto asset_imgs_paths = findFilesWithExtensionsInDir(
-        ASSETS_DIR_RELATIVE_PATH, 
-        std::span(ACCEPTED_ASSETS_EXTENSIONS)
-    );   
-    if (!asset_imgs_paths.has_value()) {
-        spdlog::error("Failed to list asset files from {}", ASSETS_DIR_RELATIVE_PATH);
-        return 1;
-    }
-
     // Histogram
     Histogram histogram;
     histogram.clear();
@@ -216,6 +250,10 @@ int main() {
     OtsuBinarizationAlgorithm otsu_binarization_alg(otsu_binarization_shader);
     EqualizationAlgorithm equalization_alg(equalization_shader);
     StretchingAlgorithm stretching_alg(stretching_shader);
+    LocalBinarizationAlgorithm local_binarization_alg(local_binarization_shader);
+    ConvolutionAlgorithm convolution_alg(convolution_shader);
+    MedianFilterAlgorithm median_filter_alg(median_filter_shader);
+    PixelizationAlgorithm pixelization_alg(pixelization_shader);
 
     const auto alg_perform_fn = [&]{
         fbo.bind();
@@ -247,7 +285,18 @@ int main() {
     const std::function<void()> submit_equalization_data_fn = [&] {
         equalization_alg.continuousSubmit(alg_descriptor_ubo_id);
     };
+    const std::function<void()> submit_local_binarization_data_fn = [&] {
+        local_binarization_alg.continuousSubmit(alg_descriptor_ubo_id);
+    };
     const std::function<void()>* submit_current_alg_data_fn = nullptr;
+
+    // dir managers 
+    DirManager assets_dir_manager("assets/textures", {".png", ".jpg", "jpeg"});
+    DirManager filters_dir_manager("assets/filters", {".ftr"});
+
+    // imgui selectable lists
+    ImGui::SelectablePathList selectable_assets_list;
+    ImGui::SelectablePathList selectable_filter_list;    
 
     // main loop
     while (!window.shouldClose()) {
@@ -350,11 +399,7 @@ int main() {
         ImGui::End();
 
         ImGui::Begin("Otsu binarization");
-            ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);
-                ImGui::SliderFloat("threshold", &otsu_binarization_alg.descriptor.threshold, 0.F, 1.F);
-            ImGui::PopItemFlag();
-            ImGui::PopStyleVar();
+            IMGUI_DISABLED(ImGui::SliderFloat("threshold", &otsu_binarization_alg.descriptor.threshold, 0.F, 1.F));
             if (ImGui::Button("Perform")) {
                 histogram.clear();
                 histogram.set(
@@ -436,6 +481,123 @@ int main() {
             }
         ImGui::End();
 
+        ImGui::Begin("Local binarization");
+            ImGui::SliderInt("Kernel size", &local_binarization_alg.descriptor.kernel_size, 1, 20);
+            {
+                ImGui::RadioButton(
+                    "Niblack", 
+                    &local_binarization_alg.descriptor.equation_type, 
+                    LocalBinarizationDescriptor::NIBLACK_EQUATION
+                );
+                ImGui::SameLine();
+                ImGui::RadioButton(
+                    "Savoula", 
+                    &local_binarization_alg.descriptor.equation_type, 
+                    LocalBinarizationDescriptor::SAVOULA_EQUATION
+                );
+                ImGui::SameLine();
+                ImGui::RadioButton(
+                    "Phanscalar", 
+                    &local_binarization_alg.descriptor.equation_type, 
+                    LocalBinarizationDescriptor::PHANSCALAR_EQUATION
+                );
+
+                ImGui::SliderFloat("Ratio", &local_binarization_alg.descriptor.ratio, 0.F, 1.F);
+
+                const auto equation_type = local_binarization_alg.descriptor.equation_type;
+                if (equation_type == LocalBinarizationDescriptor::NIBLACK_EQUATION) {
+                    IMGUI_DISABLED(ImGui::SliderFloat("Standard deviation div", &local_binarization_alg.descriptor.standard_deviation_div, 0.F, 10.F));
+                } else {
+                    ImGui::SliderFloat("Standard deviation div", &local_binarization_alg.descriptor.standard_deviation_div, 0.F, 10.F);
+                }
+
+                if (equation_type < LocalBinarizationDescriptor::PHANSCALAR_EQUATION) {
+                    IMGUI_DISABLED(ImGui::SliderFloat("pow", &local_binarization_alg.descriptor.pow, 0.F, 10.F));
+                    IMGUI_DISABLED(ImGui::SliderFloat("q", &local_binarization_alg.descriptor.q, 0.F, 10.F));
+                } else {
+                    ImGui::SliderFloat("pow", &local_binarization_alg.descriptor.pow, 0.F, 10.F);
+                    ImGui::SliderFloat("q", &local_binarization_alg.descriptor.q, 0.F, 10.F);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::Button("Perform single##3")) {
+                local_binarization_alg.submit(alg_descriptor_ubo_id);
+                local_binarization_alg.shader.bind();
+
+                alg_perform_fn();
+
+                basic_shader.bind();
+            }
+            if (static bool state = false; ImGui::Checkbox("Perform continuously##3", &state)) {
+                if (state) {
+                    local_binarization_alg.submit(alg_descriptor_ubo_id);
+                    local_binarization_alg.shader.bind();
+
+                    submit_current_alg_data_fn = &submit_local_binarization_data_fn;
+                } else {
+                    local_binarization_alg.shader.bind();
+                    alg_perform_fn();
+                    basic_shader.bind();                
+                    submit_current_alg_data_fn = nullptr;
+                }
+            }
+        ImGui::End();
+
+        ImGui::Begin("Convolution");
+            IMGUI_DISABLED(ImGui::SliderInt("Kernel size", &convolution_alg.descriptor.kernel_size, 0, 10));
+            ImGui::Checkbox("Grayscale", &convolution_alg.descriptor.gray_scale);
+            ImGui::Checkbox("Gradient", &convolution_alg.descriptor.gradient);
+            if (selectable_filter_list.draw(filters_dir_manager.files, "Available filters")) {
+                filters_dir_manager.refresh();                
+            }
+            if (ImGui::Button("Convolve using selected filter")) {
+                const auto filter_path_index = static_cast<std::size_t>(selectable_filter_list.selected);
+                convolution_alg.prepare(filters_dir_manager.files[filter_path_index]);
+                convolution_alg.submit(alg_descriptor_ubo_id);
+                convolution_alg.shader.bind();
+
+                alg_perform_fn();
+
+                basic_shader.bind();
+            }
+        ImGui::End();
+
+        ImGui::Begin("Median filter");
+            ImGui::SliderInt("Kernel size", &median_filter_alg.descriptor.kernel_size, 1, 3);
+            if (ImGui::Button("Perform single##4")) {
+                median_filter_alg.submit(alg_descriptor_ubo_id);
+                median_filter_alg.shader.bind();
+
+                alg_perform_fn();
+
+                basic_shader.bind();
+            }
+        ImGui::End();
+
+        ImGui::Begin("Pixelization");
+            ImGui::SliderInt("Kernel size", &pixelization_alg.descriptor.kernel_size, 2, 100);
+            if (ImGui::Button("Perform single##4")) {
+                pixelization_alg.prepare(img_texture.tex_id_, SHCONFIG_COMPUTE_IMAGE_BINDING);
+                pixelization_alg.submit(alg_descriptor_ubo_id);
+                pixelization_alg.shader.bind();
+
+                const auto kernel_size = pixelization_alg.descriptor.kernel_size;
+
+                const auto num_groups_x = 
+                    static_cast<u32>(image.width/kernel_size) +
+                    ((static_cast<u32>(image.width) % static_cast<u32>(kernel_size)) != 0 ? 1U : 0U);
+                const auto num_groups_y = 
+                    static_cast<u32>(image.height/kernel_size) + 
+                    ((static_cast<u32>(image.height) % static_cast<u32>(kernel_size)) != 0 ? 1U : 0U);
+
+                glDispatchCompute(num_groups_x, num_groups_y, 1);
+                glTextureBarrier();
+
+                basic_shader.bind();
+            }
+
+        ImGui::End();
+
         ImGui::Begin("Image data details");
             if (ImPlot::BeginPlot(
                     "Histogram",
@@ -481,37 +643,12 @@ int main() {
         ImGui::End();
 
         ImGui::Begin("Assets");
-            static bool assets_window_focused_state_machine { false };
-            if (ImGui::IsWindowFocused()) {
-                if (!assets_window_focused_state_machine) {
-                    asset_imgs_paths = findFilesWithExtensionsInDir(
-                        ASSETS_DIR_RELATIVE_PATH, 
-                        std::span(ACCEPTED_ASSETS_EXTENSIONS)
-                    );   
-                    assets_window_focused_state_machine = true;
-                }
-            } else {
-                assets_window_focused_state_machine = false;
-            }
-
-            if (ImGui::BeginListBox("Available images")) {
-                i32 i{ 0 };
-                for (const auto& asset_img_path : asset_imgs_paths.value()) {
-                    const auto is_selected = i == selected_asset;
-                    if (ImGui::Selectable(asset_img_path.filename().c_str(), is_selected)) {
-                        selected_asset = i;
-                    }
-                    ++i;
-
-                    if (is_selected) {
-                        ImGui::SetItemDefaultFocus();
-                    }
-                }
-                
-                ImGui::EndListBox();
+            if (selectable_assets_list.draw(assets_dir_manager.files, "Available images")) {
+                assets_dir_manager.refresh();
             }
             if (ImGui::Button("Load selected image")) {
-                if (image.update(asset_imgs_paths.value().at(static_cast<std::size_t>(selected_asset)))) {
+                const auto asset_index = static_cast<std::size_t>(selectable_assets_list.selected);
+                if (image.update(assets_dir_manager.files.at(asset_index))) {
                     img_texture.unbind(SHCONFIG_2D_TEX_BINDING);
                     img_texture.resize(image.width, image.height);
                     img_texture.update(static_cast<const void*>(image.pixels.data()));
@@ -521,7 +658,8 @@ int main() {
                 }
             }
             if (ImGui::Button("Save to selected image")) {
-                image.save(asset_imgs_paths.value().at(static_cast<std::size_t>(selected_asset)));
+                const auto asset_index = static_cast<std::size_t>(selectable_assets_list.selected);
+                image.save(assets_dir_manager.files.at(asset_index));
             }
         ImGui::End();
         
@@ -543,6 +681,10 @@ int main() {
     otsu_binarization_shader.deinit();
     stretching_shader.deinit();
     equalization_shader.deinit();
+    local_binarization_shader.deinit();
+    convolution_shader.deinit();
+    median_filter_shader.deinit();
+    pixelization_shader.deinit();
     // imgui stuff
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
