@@ -12,6 +12,6 @@ cmake_find_package
 
 [options]
 glad:spec=gl
-glad:extensions="GL_ARB_gl_spirv"
+glad:extensions='GL_ARB_gl_spirv'
 glad:gl_profile=core
 glad:gl_version=4.5
