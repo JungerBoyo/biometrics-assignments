@@ -46,7 +46,7 @@ jobs:
           vcvarsall: ${{ contains(matrix.os, 'windows') }}
           cmake: true
           ninja: true
-          conan: 1.53.0 
+          conan: true
           clangtidy: 14.0.0
           ccache: true
 
