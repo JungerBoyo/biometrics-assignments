@@ -87,6 +87,17 @@ void Window::setMousePositionCallback<void, GLFWwindow*, double, double>
 (void(*mouse_position_callback)(GLFWwindow*, double, double)) {
 	glfwSetCursorPosCallback(win_handle_->value, mouse_position_callback);
 }
+template<>
+void bm::Window::setMouseButtonCallback<void, GLFWwindow*, int, int, int>
+(void(*mouse_button_callback)(GLFWwindow*, int, int, int)) {
+	glfwSetMouseButtonCallback(win_handle_->value, mouse_button_callback);
+}
+template<>
+void bm::Window::setMouseScrollCallback<void, GLFWwindow*, double, double>
+(void(*mouse_scroll_callback)(GLFWwindow*, double, double)) {
+	glfwSetScrollCallback(win_handle_->value, mouse_scroll_callback);
+}
+
 
 void Window::swapBuffers() const {
 	glfwSwapBuffers(win_handle_->value);

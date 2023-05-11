@@ -28,7 +28,13 @@ struct Window {
 
 	template<typename R, typename ...Args>
 	void setMousePositionCallback(R(*mouse_position_callback)(Args...));
+	
+	template<typename R, typename ...Args>
+	void setMouseButtonCallback(R(*mouse_button_callback)(Args...));
 
+	template<typename R, typename ...Args>
+	void setMouseScrollCallback(R(*mouse_scroll_callback)(Args...));
+	
 	void swapBuffers() const;
 	bool shouldClose() const;
 	void pollEvents() const;
