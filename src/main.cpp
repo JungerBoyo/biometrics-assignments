@@ -137,7 +137,7 @@ int main() {
 
 	// App data
 	struct TransformData {
-		f32 quad_scale{75.5F};
+		f32 quad_scale{.5F};
 		f32 quad_x_offset{0.F};
 		f32 quad_y_offset{0.F};
 		f32 aspect_ratio{1.F};
@@ -732,7 +732,6 @@ int main() {
 			tmp.quad_scale = static_cast<f32>(drawing_descriptor.width_px) * px_scale_image;
 			tmp.aspect_ratio = (static_cast<f32>(window_data.window_width) / static_cast<f32>(window_data.window_height));
 
-
 			const auto image_offset_correction_x = px_size_image * (
 				(transform_data.quad_scale * transform_data.quad_x_offset)/px_size_image -
 				std::roundf((transform_data.quad_scale * transform_data.quad_x_offset)/px_size_image));
@@ -757,7 +756,46 @@ int main() {
 			std::memcpy(static_cast<void*>(tmp.drawing_cursor_color), static_cast<void*>(drawing_descriptor.color), 4 * sizeof(f32));
 
 			if (drawing_descriptor.drawing) {
+				//quad_x_offset in image space
+				tmp.quad_x_offset = tmp.quad_x_offset / transform_data.quad_scale - transform_data.quad_x_offset;
+				//quad_y_offset in image space
+				const auto logical_scale_in_y = transform_data.quad_scale * transform_data.aspect_ratio;
+				tmp.quad_y_offset = -(tmp.quad_y_offset / logical_scale_in_y - transform_data.quad_y_offset/transform_data.aspect_ratio);
+				tmp.aspect_ratio = static_cast<f32>(image.width) / static_cast<f32>(image.height);
+				tmp.quad_scale = (1.F / static_cast<f32>(image.width)) * static_cast<f32>(drawing_descriptor.width_px);
 
+				drawing_cursor_shader.bind();
+
+				glNamedBufferSubData(
+					quad_ubo_id, 0, sizeof(tmp),
+					static_cast<const void *>(&tmp)
+				);
+
+				img_texture.unbind(SHCONFIG_2D_TEX_BINDING);
+				fbo.bind();
+
+				glViewport(0, 0, image.width, image.height);
+				glFramebufferTexture2D(
+					GL_FRAMEBUFFER,
+					GL_COLOR_ATTACHMENT0,
+					GL_TEXTURE_2D, img_texture.tex_id_, 0
+				);
+				
+				glDrawArrays(GL_TRIANGLES, 0, QUAD_VERTICES.size());
+
+				glTextureBarrier();
+
+				glFramebufferTexture2D(
+					GL_FRAMEBUFFER,
+					GL_COLOR_ATTACHMENT0,
+					GL_TEXTURE_2D, fbo.tex_id_, 0
+				);
+
+				fbo.unbind();
+
+				img_texture.bind(SHCONFIG_2D_TEX_BINDING);
+
+				basic_shader.bind();	
 			} else {
 				drawing_cursor_shader.bind();	
 				

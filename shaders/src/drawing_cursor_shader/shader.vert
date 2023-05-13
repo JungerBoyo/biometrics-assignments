@@ -11,6 +11,6 @@ layout(std140, binding = 5) uniform Transform {
     vec4 drawing_cursor_color;
 };
 
-void main() { 
+void main() {
     gl_Position = vec4(scale*in_position.x + offset_x, scale*aspect_ratio*in_position.y + offset_y, -1.0, 1.0);
 }
