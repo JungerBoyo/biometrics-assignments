@@ -31,7 +31,7 @@ using namespace bm;
 
 constexpr i64 MAX_ALG_DESCRIPTOR_SIZE{4096};
 
-constexpr std::string_view DEFAULT_ASSET_IMAGE_PATH{"assets/textures/OLFJ3yF.jpg"};
+constexpr std::string_view DEFAULT_ASSET_IMAGE_PATH{"assets/textures/Bikesgray.jpg"};
 
 namespace ImGui {
 
@@ -97,19 +97,24 @@ struct SelectablePathList {
 }
 
 struct WindowData {
+	// moving and scaling data
 	f32 &quad_x_offset;
 	f32 &quad_y_offset;
 	f32 &quad_scale;
-	bool lhs_button_pressed{false};
+	bool lhs_button_pressed_mv{false};
 	f32 last_mouse_x_pos{0.F};
 	f32 last_mouse_y_pos{0.F};
 	i32 window_width{0};
 	i32 window_height{0};
+	// pencil drawing data
+	bool& draw_mode;
+	bool& lhs_button_pressed_draw;
 };
 
 static void mousePositionCallback(GLFWwindow *win_handle, double x_pos, double y_pos);
-static void mouseButtonCallback(GLFWwindow *window, int button, int action, int mods);
-static void mouseScrollCallback(GLFWwindow *window, double xoffset, double yoffset);
+static void mouseButtonCallback(GLFWwindow *win_handle, int button, int action, int mods);
+static void mouseScrollCallback(GLFWwindow *win_handle, double xoffset, double yoffset);
+static void keyCallback(GLFWwindow* win_handle, int key, int scancode, int action, int mods);
 
 int main() {
 	// intialize glfw3 + glad
@@ -132,25 +137,20 @@ int main() {
 
 	// App data
 	struct TransformData {
-		f32 quad_scale{.5F};
+		f32 quad_scale{75.5F};
 		f32 quad_x_offset{0.F};
 		f32 quad_y_offset{0.F};
 		f32 aspect_ratio{1.F};
 		u32 flip_tex_y_axis_xor{0};
+		alignas(16) f32 drawing_cursor_color[4];
 	} transform_data;
 	std::array<f32, 3> clear_color{{0.F, 0.F, 0.F}};
 
-	WindowData window_data{
-		.quad_x_offset = transform_data.quad_x_offset,
-		.quad_y_offset = transform_data.quad_y_offset,
-		.quad_scale = transform_data.quad_scale
-	};
-
-	window.setWinUserDataPointer(static_cast<void *>(&window_data));
 
 	window.setMousePositionCallback(mousePositionCallback);
 	window.setMouseButtonCallback(mouseButtonCallback);
 	window.setMouseScrollCallback(mouseScrollCallback);
+	window.setKeyCallback(keyCallback);
 
 	u32 quad_vbo_id{0U};
 	u32 quad_vao_id{0U};
@@ -198,6 +198,12 @@ int main() {
 		"shaders/bin/median_filter_shader/frag.spv"
 	});
 	Shader pixelization_shader(Shader::Type::COMPUTE, {"shaders/bin/pixelization_shader/comp.spv"});
+
+	Shader drawing_cursor_shader(Shader::Type::VERTEX_FRAGMENT,
+	{
+		"shaders/bin/drawing_cursor_shader/vert.spv",
+		"shaders/bin/drawing_cursor_shader/frag.spv"
+	});
 
 	// create VBO and initialize
 	glCreateBuffers(1, &quad_vbo_id);
@@ -316,7 +322,7 @@ int main() {
 	ImGui::SelectablePathList selectable_filter_list;
 
 	// window visibility logic artifacts
-	constexpr std::size_t WINDOWS_COUNT{11};
+	constexpr std::size_t WINDOWS_COUNT{12};
 	enum WIN_TYPE : std::size_t {
 		THRESHOLD_BINARIZATION,
 		LOCAL_BINARIZATION,
@@ -329,15 +335,29 @@ int main() {
 		IMAGE_DATA_DETAILS,
 		CONFIG,
 		ASSETS,
-		// PENCIL,
+		DRAWING,
 	};
 	std::bitset<WINDOWS_COUNT> win_visibility_mask(lim<std::size_t>::max());
 
 	// toolbox
-	// struct PencilDescriptor {
-	//     f32 width;
-	//     f32 color[3];
-	// };
+	struct DrawingDescriptor {
+	    i32 width_px{ 1 };
+	    f32 color[4] = { 0.F, 0.F, 0.F, 1.F };
+		bool draw_mode{ false };
+		bool drawing{ false };
+	};
+	DrawingDescriptor drawing_descriptor{};
+
+	// Window data	
+	WindowData window_data{
+		.quad_x_offset = transform_data.quad_x_offset,
+		.quad_y_offset = transform_data.quad_y_offset,
+		.quad_scale = transform_data.quad_scale,
+		
+		.draw_mode = drawing_descriptor.draw_mode,
+		.lhs_button_pressed_draw = drawing_descriptor.drawing
+	};
+	window.setWinUserDataPointer(static_cast<void *>(&window_data));
 
 	// main loop
 	while (!window.shouldClose()) {
@@ -350,8 +370,8 @@ int main() {
 		glClearColor(clear_color[0], clear_color[1], clear_color[2], 1.F);
 
 		transform_data.aspect_ratio =
-			(static_cast<float>(width) / static_cast<float>(height)) *
-			(static_cast<float>(image.height) / static_cast<float>(image.width));
+			(static_cast<f32>(width) / static_cast<f32>(height)) *
+			(static_cast<f32>(image.height) / static_cast<f32>(image.width));
 
 		glNamedBufferSubData(
 			quad_ubo_id, 0, sizeof(transform_data),
@@ -695,9 +715,62 @@ int main() {
 			ImGui::End();
 		}
 
-		// if (win_visibility_mask[WIN_TYPE::PENCIL] && ImGui::Begin("Pencil")) {
+		if (win_visibility_mask[WIN_TYPE::DRAWING] && ImGui::Begin("Drawing")) {
+			ImGui::SliderInt("Pencil width [px]", &drawing_descriptor.width_px, 1, 128);
+			ImGui::ColorPicker4("Color", drawing_descriptor.color);
+			ImGui::End();
+		}
 
-		// }
+		if (drawing_descriptor.draw_mode) {
+			TransformData tmp{};
+			const auto px_size_window = 1.F/static_cast<f32>(window_data.window_width);
+			const auto image_width_in_window_px = transform_data.quad_scale * static_cast<f32>(window_data.window_width);
+			const auto window_image_px_ratio = image_width_in_window_px/static_cast<f32>(image.width);
+			const auto px_scale_image = px_size_window * window_image_px_ratio; 
+			const auto px_size_image = 2.F * px_scale_image; // window bounds are (-1.0, 1.0)
+
+			tmp.quad_scale = static_cast<f32>(drawing_descriptor.width_px) * px_scale_image;
+			tmp.aspect_ratio = (static_cast<f32>(window_data.window_width) / static_cast<f32>(window_data.window_height));
+
+
+			const auto image_offset_correction_x = px_size_image * (
+				(transform_data.quad_scale * transform_data.quad_x_offset)/px_size_image -
+				std::roundf((transform_data.quad_scale * transform_data.quad_x_offset)/px_size_image));
+			tmp.quad_x_offset =
+				image_offset_correction_x +
+				px_size_image *
+				std::roundf((2.F * (window_data.last_mouse_x_pos/window_data.window_width) - 1.F) / px_size_image) +
+				((drawing_descriptor.width_px % 2 == 1) ? px_scale_image : 0.F);
+
+			const auto logical_px_scale_image_in_y = tmp.aspect_ratio * px_scale_image;
+			const auto logical_px_size_image_in_y = 2.F * logical_px_scale_image_in_y;
+
+			const auto image_offset_correction_y = logical_px_size_image_in_y * (
+				(transform_data.quad_scale * transform_data.quad_y_offset)/logical_px_size_image_in_y -
+				std::roundf((transform_data.quad_scale * transform_data.quad_y_offset)/logical_px_size_image_in_y));
+			tmp.quad_y_offset =
+				image_offset_correction_y +
+				-logical_px_size_image_in_y *
+				std::roundf((2.F * (window_data.last_mouse_y_pos/window_data.window_height) - 1.F) / logical_px_size_image_in_y) -
+				((drawing_descriptor.width_px % 2 == 1) ? logical_px_scale_image_in_y : 0.F);
+
+			std::memcpy(static_cast<void*>(tmp.drawing_cursor_color), static_cast<void*>(drawing_descriptor.color), 4 * sizeof(f32));
+
+			if (drawing_descriptor.drawing) {
+
+			} else {
+				drawing_cursor_shader.bind();	
+				
+				glNamedBufferSubData(
+					quad_ubo_id, 0, sizeof(tmp),
+					static_cast<const void *>(&tmp)
+				);
+	
+				glDrawArrays(GL_TRIANGLES, 0, QUAD_VERTICES.size());
+
+				basic_shader.bind();	
+			}
+		}
 
 		ImGui::Render();
 
@@ -733,27 +806,37 @@ int main() {
 void mousePositionCallback(GLFWwindow* win_handle, double x_pos, double y_pos) {
 	auto *window_data = static_cast<WindowData*>(glfwGetWindowUserPointer(win_handle));
 
-	static constexpr f32 OFFSET_WAGE{1.5F};
-
-	if (window_data->lhs_button_pressed) {
+	if (window_data->lhs_button_pressed_mv) {
+		static constexpr f32 OFFSET_WAGE{1.5F};
 		const auto dx = static_cast<f32>(x_pos) - window_data->last_mouse_x_pos;
 		const auto dy = static_cast<f32>(y_pos) - window_data->last_mouse_y_pos;
 
-		window_data->quad_x_offset += dx * OFFSET_WAGE / static_cast<f32>(window_data->window_width);	
-		window_data->quad_y_offset -= dy * OFFSET_WAGE / static_cast<f32>(window_data->window_height);
+		const auto scale_power = 1.F / window_data->quad_scale;
+
+		window_data->quad_x_offset += scale_power * dx * OFFSET_WAGE / static_cast<f32>(window_data->window_width);	
+		window_data->quad_y_offset -= scale_power * dy * OFFSET_WAGE / static_cast<f32>(window_data->window_height);
 	}
-	
+
 	window_data->last_mouse_x_pos = static_cast<f32>(x_pos);
 	window_data->last_mouse_y_pos = static_cast<f32>(y_pos);
 }
 void mouseButtonCallback(GLFWwindow* win_handle, int button, int action, int mods) {
-	const bool is_mod = ((mods & GLFW_MOD_CONTROL) > 0 && (mods & ~GLFW_MOD_CONTROL) == 0);
+	const bool is_mod_ctrl = ((mods & GLFW_MOD_CONTROL) > 0 && (mods & ~GLFW_MOD_CONTROL) == 0);
 	auto *window_data = static_cast<WindowData*>(glfwGetWindowUserPointer(win_handle));
 
-	if (button == GLFW_MOUSE_BUTTON_LEFT && is_mod && action == GLFW_PRESS && !window_data->lhs_button_pressed) {
-		window_data->lhs_button_pressed = true;
-	} else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE && window_data->lhs_button_pressed) {
-		window_data->lhs_button_pressed = false;
+	if (button == GLFW_MOUSE_BUTTON_LEFT) {
+		if ((action & (GLFW_PRESS|GLFW_REPEAT)) > 0) {
+			if (!window_data->lhs_button_pressed_mv && !window_data->lhs_button_pressed_draw) {
+				if (window_data->draw_mode) {
+					window_data->lhs_button_pressed_draw = true;
+				} else {
+					window_data->lhs_button_pressed_mv = is_mod_ctrl;
+				}
+			}
+		} else if (action == GLFW_RELEASE) {
+			window_data->lhs_button_pressed_mv = false;
+			window_data->lhs_button_pressed_draw = false;
+		}
 	}
 }
 void mouseScrollCallback(GLFWwindow* win_handle, double, double yoffset) {
@@ -761,5 +844,13 @@ void mouseScrollCallback(GLFWwindow* win_handle, double, double yoffset) {
 
 	static constexpr f32 SCALE_WAGE{0.05F};
 
-	window_data->quad_scale += SCALE_WAGE * static_cast<f32>(yoffset);
+	window_data->quad_scale += window_data->quad_scale * SCALE_WAGE * static_cast<f32>(yoffset);
+}
+
+void keyCallback(GLFWwindow* win_handle, int key, int scancode, int action, int mods) {
+	auto* window_data = static_cast<WindowData*>(glfwGetWindowUserPointer(win_handle));
+
+	if (key == GLFW_KEY_D && (mods & (GLFW_MOD_CONTROL|GLFW_MOD_SHIFT)) > 0 && action == GLFW_PRESS) {
+		window_data->draw_mode = !window_data->draw_mode;
+	}
 }
