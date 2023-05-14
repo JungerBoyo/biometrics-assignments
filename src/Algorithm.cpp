@@ -250,3 +250,14 @@ void PixelizationAlgorithm::submit(u32 buff_id) {
         static_cast<const void*>(&descriptor)
     );
 }
+
+void GlobalFillAlgorithm::continuousSubmit(u32 buff_id) {
+    this->submit(buff_id);
+}
+void GlobalFillAlgorithm::submit(u32 buff_id) {
+    glNamedBufferSubData(
+        buff_id,
+        0, sizeof(GlobalFillDescriptor),
+        static_cast<const void*>(&descriptor)
+    );
+}

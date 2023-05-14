@@ -3,6 +3,8 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <future>
+#include <stack>
 
 #include <Algorithm.hpp>
 #include <DirManager.hpp>
@@ -40,22 +42,6 @@ namespace ImGui {
 	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);\
 	x;\
 	ImGui::PopItemFlag();\
-	ImGui::PopStyleVar()
-
-#define IMGUI_DISABLED_CONDITION(c, x)\
-	if (c) {\
-		ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);\
-		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);\
-		x ImGui::PopItemFlag();\
-		ImGui::PopStyleVar();\
-	} else {\
-		x\
-	}
-
-#define IMGUI_DISABLED_RAW(x)\
-	ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);\
-	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.6f);\
-	x ImGui::PopItemFlag();\
 	ImGui::PopStyleVar()
 
 struct SelectablePathList {
@@ -109,6 +95,8 @@ struct WindowData {
 	// pencil drawing data
 	bool& draw_mode;
 	bool& lhs_button_pressed_draw;
+	bool& rhs_button_pressed_fill;
+	bool& fill_in_progress;
 };
 
 static void mousePositionCallback(GLFWwindow *win_handle, double x_pos, double y_pos);
@@ -205,6 +193,12 @@ int main() {
 		"shaders/bin/drawing_cursor_shader/frag.spv"
 	});
 
+	Shader global_fill_shader(Shader::Type::VERTEX_FRAGMENT, 
+	{
+		"shaders/bin/global_fill_shader/vert.spv",
+		"shaders/bin/global_fill_shader/frag.spv"
+	});
+
 	// create VBO and initialize
 	glCreateBuffers(1, &quad_vbo_id);
 	glCreateVertexArrays(1, &quad_vao_id);
@@ -276,6 +270,7 @@ int main() {
 	ConvolutionAlgorithm convolution_alg(convolution_shader);
 	MedianFilterAlgorithm median_filter_alg(median_filter_shader);
 	PixelizationAlgorithm pixelization_alg(pixelization_shader);
+	GlobalFillAlgorithm global_fill_algorithm(global_fill_shader);
 
 	const auto alg_perform_fn = [&] {
 		fbo.bind();
@@ -322,7 +317,7 @@ int main() {
 	ImGui::SelectablePathList selectable_filter_list;
 
 	// window visibility logic artifacts
-	constexpr std::size_t WINDOWS_COUNT{12};
+	constexpr std::size_t WINDOWS_COUNT{13};
 	enum WIN_TYPE : std::size_t {
 		THRESHOLD_BINARIZATION,
 		LOCAL_BINARIZATION,
@@ -336,6 +331,7 @@ int main() {
 		CONFIG,
 		ASSETS,
 		DRAWING,
+		FILL
 	};
 	std::bitset<WINDOWS_COUNT> win_visibility_mask(lim<std::size_t>::max());
 
@@ -348,6 +344,87 @@ int main() {
 	};
 	DrawingDescriptor drawing_descriptor{};
 
+	struct FillDescriptor {
+		i32 max_px_count{ 1 };
+		bool all_px{ true };
+		i32 r_px_distance[2];
+		i32 g_px_distance[2];
+		i32 b_px_distance[2];
+		bool global_mode{ false };
+		f32 color[3] = {0.F, 0.F, 0.F};
+		bool fill{ false };
+		bool fill_in_progress{ false };
+		std::future<void> task;
+	};
+	FillDescriptor fill_descriptor{};
+
+	const auto fill_fn = [&](i32 start_x, i32 start_y) {
+		struct Position { i32 x; i32 y; };
+
+		const auto root_px_color_index = start_x + start_y * image.width;
+		u8* root_px_color = &image.pixels[static_cast<std::size_t>(image.channels_num * root_px_color_index)];
+
+		const auto r_min = static_cast<u8>(std::clamp(static_cast<i32>(root_px_color[0]) - fill_descriptor.r_px_distance[0], 0, 255));
+		const auto r_max = static_cast<u8>(std::clamp(static_cast<i32>(root_px_color[0]) + fill_descriptor.r_px_distance[1], 0, 255));
+		const auto g_min = static_cast<u8>(std::clamp(static_cast<i32>(root_px_color[1]) - fill_descriptor.g_px_distance[0], 0, 255));
+		const auto g_max = static_cast<u8>(std::clamp(static_cast<i32>(root_px_color[1]) + fill_descriptor.g_px_distance[1], 0, 255));
+		const auto b_min = static_cast<u8>(std::clamp(static_cast<i32>(root_px_color[2]) - fill_descriptor.b_px_distance[0], 0, 255));
+		const auto b_max = static_cast<u8>(std::clamp(static_cast<i32>(root_px_color[2]) + fill_descriptor.b_px_distance[1], 0, 255));
+
+		const u8 color[] = { 
+			static_cast<u8>(fill_descriptor.color[0] * 255.F),
+			static_cast<u8>(fill_descriptor.color[1] * 255.F),
+			static_cast<u8>(fill_descriptor.color[2] * 255.F),
+		};
+
+		std::memcpy(static_cast<void*>(root_px_color), static_cast<const void*>(color), sizeof(color));
+
+		std::stack<Position> call_stack;
+		call_stack.push(Position{start_x, start_y});
+
+		const auto bitset_size = ((image.width * image.height)/64) + static_cast<i32>(((image.width * image.height)%64) != 0);
+		std::vector<u64> visited(static_cast<std::size_t>(bitset_size), 0UL);
+
+		i32 px_counter{ 0 };
+		std::array<Position, 4> base_offsets{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
+		while (!call_stack.empty()) {
+			if (!fill_descriptor.all_px) {
+				if (px_counter > fill_descriptor.max_px_count) {
+					return;
+				} 
+				++px_counter;
+			}
+
+			const Position position = call_stack.top();
+			call_stack.pop();
+			for (const auto offset : base_offsets) {
+				const auto next_position = Position{position.x + offset.x, position.y + offset.y};
+				if (next_position.x < 0 || next_position.x >= image.width || 
+					next_position.y < 0 || next_position.y >= image.height) {
+					continue;
+				}
+
+				const auto px_index = next_position.x + next_position.y * image.width;
+				if ((visited[px_index / 64] & (1UL << (px_index % 64))) > 0) {
+					continue;
+				}
+
+				u8* px_color = &image.pixels[static_cast<std::size_t>(px_index * image.channels_num)];
+
+				const auto is_in_r_bounds = (px_color[0] >= r_min && px_color[0] <= r_max);
+				const auto is_in_g_bounds = (px_color[1] >= g_min && px_color[1] <= g_max);
+				const auto is_in_b_bounds = (px_color[2] >= b_min && px_color[2] <= b_max);
+				if (is_in_r_bounds && is_in_g_bounds && is_in_b_bounds) {
+					std::memcpy(static_cast<void*>(px_color), static_cast<const void*>(color), sizeof(color));
+					call_stack.push(next_position);
+					visited[px_index / 64] |= (1UL << (px_index % 64));
+				}
+			}
+		}
+	};
+
+	fill_descriptor.task = std::async(std::launch::async, fill_fn, 0, 0);
+
 	// Window data	
 	WindowData window_data{
 		.quad_x_offset = transform_data.quad_x_offset,
@@ -355,7 +432,9 @@ int main() {
 		.quad_scale = transform_data.quad_scale,
 		
 		.draw_mode = drawing_descriptor.draw_mode,
-		.lhs_button_pressed_draw = drawing_descriptor.drawing
+		.lhs_button_pressed_draw = drawing_descriptor.drawing,
+		.rhs_button_pressed_fill = fill_descriptor.fill,
+		.fill_in_progress = fill_descriptor.fill_in_progress
 	};
 	window.setWinUserDataPointer(static_cast<void *>(&window_data));
 
@@ -718,10 +797,27 @@ int main() {
 		if (win_visibility_mask[WIN_TYPE::DRAWING] && ImGui::Begin("Drawing")) {
 			ImGui::SliderInt("Pencil width [px]", &drawing_descriptor.width_px, 1, 128);
 			ImGui::ColorPicker4("Color", drawing_descriptor.color);
+			ImGui::Checkbox("Draw mode", &drawing_descriptor.draw_mode);
+			IMGUI_DISABLED(ImGui::Checkbox("Drawing", &drawing_descriptor.drawing));
+			ImGui::End();
+		}
+		if (win_visibility_mask[WIN_TYPE::FILL] && ImGui::Begin("Fill")) {
+			if (fill_descriptor.all_px || fill_descriptor.global_mode) {
+				IMGUI_DISABLED(ImGui::SliderInt("Pixel count", &fill_descriptor.max_px_count, 0, image.width * image.height));
+			} else {
+				ImGui::SliderInt("Pixel count", &fill_descriptor.max_px_count, 0, image.width * image.height);
+			}
+			ImGui::Checkbox("All pixels", &fill_descriptor.all_px);
+			ImGui::SliderInt2("R distance", fill_descriptor.r_px_distance, 0, 255);
+			ImGui::SliderInt2("G distance", fill_descriptor.g_px_distance, 0, 255);
+			ImGui::SliderInt2("B distance", fill_descriptor.b_px_distance, 0, 255);
+			ImGui::Checkbox("Global mode", &fill_descriptor.global_mode);
+			ImGui::ColorEdit3("Color", fill_descriptor.color);
 			ImGui::End();
 		}
 
 		if (drawing_descriptor.draw_mode) {
+			win_visibility_mask.reset();
 			TransformData tmp{};
 			const auto px_size_window = 1.F/static_cast<f32>(window_data.window_width);
 			const auto image_width_in_window_px = transform_data.quad_scale * static_cast<f32>(window_data.window_width);
@@ -796,6 +892,37 @@ int main() {
 				img_texture.bind(SHCONFIG_2D_TEX_BINDING);
 
 				basic_shader.bind();	
+			} else if (fill_descriptor.fill) {
+				fill_descriptor.fill = false;
+				
+				const auto start_x = (tmp.quad_x_offset / transform_data.quad_scale - transform_data.quad_x_offset + 1.F)/2.F * static_cast<f32>(image.width);
+				const auto logical_scale_in_y = transform_data.quad_scale * transform_data.aspect_ratio;
+				const auto start_y = (-(tmp.quad_y_offset / logical_scale_in_y - transform_data.quad_y_offset/transform_data.aspect_ratio) + 1.F)/2.F * static_cast<f32>(image.height); 
+				if (fill_descriptor.global_mode) {
+					global_fill_algorithm.shader.bind();
+					
+					const auto root_px_color_index = static_cast<i32>(start_x) + static_cast<i32>(start_y) * image.width;
+					const u8* root_px_color = &image.pixels[static_cast<std::size_t>(image.channels_num * root_px_color_index)];
+					global_fill_algorithm.descriptor = GlobalFillDescriptor{
+						static_cast<f32>(std::clamp(static_cast<i32>(root_px_color[0]) - fill_descriptor.r_px_distance[0], 0, 255)) / 255.F,
+						static_cast<f32>(std::clamp(static_cast<i32>(root_px_color[0]) + fill_descriptor.r_px_distance[1], 0, 255)) / 255.F,
+						static_cast<f32>(std::clamp(static_cast<i32>(root_px_color[1]) - fill_descriptor.g_px_distance[0], 0, 255)) / 255.F,
+						static_cast<f32>(std::clamp(static_cast<i32>(root_px_color[1]) + fill_descriptor.g_px_distance[1], 0, 255)) / 255.F,
+						static_cast<f32>(std::clamp(static_cast<i32>(root_px_color[2]) - fill_descriptor.b_px_distance[0], 0, 255)) / 255.F,
+						static_cast<f32>(std::clamp(static_cast<i32>(root_px_color[2]) + fill_descriptor.b_px_distance[1], 0, 255)) / 255.F,
+						{ fill_descriptor.color[0], fill_descriptor.color[1], fill_descriptor.color[2] }
+					};
+
+					global_fill_algorithm.submit(alg_descriptor_ubo_id);
+
+					alg_perform_fn();
+
+					basic_shader.bind();	
+				} else {
+					fill_descriptor.fill_in_progress = true;
+					fill_descriptor.task = std::async(std::launch::async, fill_fn, static_cast<i32>(start_x), static_cast<i32>(start_y));
+				}
+
 			} else {
 				drawing_cursor_shader.bind();	
 				
@@ -808,6 +935,18 @@ int main() {
 
 				basic_shader.bind();	
 			}
+		} else {
+			win_visibility_mask.set();
+		}
+
+		if (fill_descriptor.fill_in_progress && fill_descriptor.task.valid() && 
+			fill_descriptor.task.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+				
+			fill_descriptor.fill_in_progress = false;
+			fill_descriptor.task.get();
+
+			img_texture.update(static_cast<void*>(image.pixels.data()));
+			glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
 		}
 
 		ImGui::Render();
@@ -819,10 +958,14 @@ int main() {
 	// opengl stuff
 	std::array<u32, 3> buffers{{quad_vbo_id, quad_ubo_id, alg_descriptor_ubo_id}};
 	glDeleteBuffers(buffers.size(), buffers.data());
+
 	glDeleteVertexArrays(1, &quad_vao_id);
+
 	std::array<u32, 2> textures{{img_texture.tex_id_, fbo.tex_id_}};
 	glDeleteTextures(textures.size(), textures.data());
+
 	glDeleteFramebuffers(1, &fbo.fbo_id_);
+
 	basic_shader.deinit();
 	threshold_binarization_shader.deinit();
 	otsu_binarization_shader.deinit();
@@ -832,11 +975,15 @@ int main() {
 	convolution_shader.deinit();
 	median_filter_shader.deinit();
 	pixelization_shader.deinit();
+	drawing_cursor_shader.deinit();
+	global_fill_shader.deinit();
+
 	// imgui stuff
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImPlot::DestroyContext();
 	ImGui::DestroyContext();
+
 	// window
 	window.deinit();
 }
@@ -874,6 +1021,10 @@ void mouseButtonCallback(GLFWwindow* win_handle, int button, int action, int mod
 		} else if (action == GLFW_RELEASE) {
 			window_data->lhs_button_pressed_mv = false;
 			window_data->lhs_button_pressed_draw = false;
+		}
+	} else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+		if (!window_data->fill_in_progress) {
+			window_data->rhs_button_pressed_fill = (action == GLFW_PRESS);
 		}
 	}
 }

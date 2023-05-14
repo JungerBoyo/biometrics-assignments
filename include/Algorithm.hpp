@@ -156,6 +156,21 @@ struct PixelizationAlgorithm : Algorithm<PixelizationDescriptor, u32, u32> {
 	~PixelizationAlgorithm() override = default;
 };
 
+struct GlobalFillDescriptor {
+	f32 r_min; f32 r_max;
+	f32 g_min; f32 g_max;
+	f32 b_min; f32 b_max;
+	alignas(16) f32 color[3];
+};
+struct GlobalFillAlgorithm : Algorithm<GlobalFillDescriptor> {
+	GlobalFillAlgorithm(const Shader &shader) : Base(shader) {}
+
+	void prepare() override {}
+	void continuousSubmit(u32 buff_id) override;
+	void submit(u32 buff_id) override;
+
+	~GlobalFillAlgorithm() override = default;
+};
 } // namespace bm
 
 #endif
