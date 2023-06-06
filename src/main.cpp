@@ -6,6 +6,7 @@
 #include <future>
 #include <stack>
 
+#include <Skeletonization.hpp>
 #include <Algorithm.hpp>
 #include <DirManager.hpp>
 #include <Framebuffer.hpp>
@@ -423,8 +424,6 @@ int main() {
 		}
 	};
 
-	fill_descriptor.task = std::async(std::launch::async, fill_fn, 0, 0);
-
 	// Window data	
 	WindowData window_data{
 		.quad_x_offset = transform_data.quad_x_offset,
@@ -475,6 +474,28 @@ int main() {
 		// 	ImGui::ColorPicker3("clear color", clear_color.data());
 		// 	ImGui::End();
 		// }
+
+		{
+			ImGui::Begin("Skeletonization");
+
+			if (ImGui::Button("Perform KMM")) {
+				performKMMSkeletonization(static_cast<void*>(image.pixels.data()), image.width, image.height, image.channels_num);
+				img_texture.update(static_cast<void*>(image.pixels.data()));
+				glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
+			}
+			if (ImGui::Button("Perform K3M")) {
+				performK3MSkeletonization(static_cast<void*>(image.pixels.data()), image.width, image.height, image.channels_num);
+				img_texture.update(static_cast<void*>(image.pixels.data()));
+				glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
+			}
+			if (ImGui::Button("Perform crossing number")) {
+				performCrossingNumber(static_cast<void*>(image.pixels.data()), image.width, image.height, image.channels_num, "tmp.txt");
+				img_texture.update(static_cast<void*>(image.pixels.data()));
+				glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
+			}
+			ImGui::End();
+		}
+
 
 		if (win_visibility_mask[WIN_TYPE::THRESHOLD_BINARIZATION]) {
 			ImGui::Begin("Threshold binarization");
@@ -794,14 +815,16 @@ int main() {
 			ImGui::End();
 		}
 
-		if (win_visibility_mask[WIN_TYPE::DRAWING] && ImGui::Begin("Drawing")) {
+		if (win_visibility_mask[WIN_TYPE::DRAWING]) {
+			ImGui::Begin("Drawing");
 			ImGui::SliderInt("Pencil width [px]", &drawing_descriptor.width_px, 1, 128);
 			ImGui::ColorPicker4("Color", drawing_descriptor.color);
 			ImGui::Checkbox("Draw mode", &drawing_descriptor.draw_mode);
 			IMGUI_DISABLED(ImGui::Checkbox("Drawing", &drawing_descriptor.drawing));
 			ImGui::End();
 		}
-		if (win_visibility_mask[WIN_TYPE::FILL] && ImGui::Begin("Fill")) {
+		if (win_visibility_mask[WIN_TYPE::FILL]) {
+			ImGui::Begin("Fill");
 			if (fill_descriptor.all_px || fill_descriptor.global_mode) {
 				IMGUI_DISABLED(ImGui::SliderInt("Pixel count", &fill_descriptor.max_px_count, 0, image.width * image.height));
 			} else {
@@ -1036,7 +1059,7 @@ void mouseScrollCallback(GLFWwindow* win_handle, double, double yoffset) {
 	window_data->quad_scale += window_data->quad_scale * SCALE_WAGE * static_cast<f32>(yoffset);
 }
 
-void keyCallback(GLFWwindow* win_handle, int key, int scancode, int action, int mods) {
+void keyCallback(GLFWwindow* win_handle, int key, int, int action, int mods) {
 	auto* window_data = static_cast<WindowData*>(glfwGetWindowUserPointer(win_handle));
 
 	if (key == GLFW_KEY_D && (mods & (GLFW_MOD_CONTROL|GLFW_MOD_SHIFT)) > 0 && action == GLFW_PRESS) {

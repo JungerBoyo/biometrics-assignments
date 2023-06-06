@@ -1,0 +1,5 @@
+points = 198
+ridge_ending_points = 1147
+continuing_ridge_points = 2594
+bifurcation_points = 2290
+crossing_points = 707

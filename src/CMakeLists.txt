@@ -15,6 +15,7 @@ add_library(boilerplate_IMPL STATIC
   Texture2D.cpp
   Algorithm.cpp
   DirManager.cpp
+  Skeletonization.cpp
 )
 target_link_libraries(boilerplate_IMPL PUBLIC boilerplate_INC)
 

@@ -11,6 +11,7 @@ add_library(boilerplate_INC INTERFACE
     Texture2D.hpp
     Algorithm.hpp
     DirManager.hpp
+    Skeletonization.hpp
 )
 
 target_link_system_libraries(boilerplate_INC INTERFACE glfw::glfw)
